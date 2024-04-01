@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  
 
 jobs:
   test:
@@ -13,50 +12,45 @@ jobs:
 
     strategy:
       matrix:
-        os: [ ubuntu-latest ]
+        os: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
 
-      - name: Use Node
-        id: setup-node
+      - name: Use Node.js
         uses: actions/setup-node@v4.0.1
         with:
           node-version: 16.x
           cache: 'npm'
 
-      - name: Deps
-        run: |
-          npm ci
+      - name: Install Dependencies
+        run: npm ci
 
-      - name: Format
-        run: |
-          npm run format 
-      - name: Lint
+      - name: Format Code
+        run: npm run format
+
+      - name: Lint Code
         run: |
           npm run lint
           npm run format:check
 
-      - name: Test
-        run: |
-          npm run test:ci
-      - name: Build
+      - name: Run Tests
+        run: npm run test:ci
+
+      - name: Build Project
         run: |
           npm run build
           cp package.json dist/
-          
-      - name: run build
-        run: npm run build 
-      
+
       - name: Upload Artifact
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v2
         with:
           name: result
           path: dist/
-        
+
   deployment:
-    name: provision aws infrastructure using terraform 
+    name: Provision AWS Infrastructure using Terraform 
     runs-on: ubuntu-latest
     needs: test
     outputs: 
@@ -66,8 +60,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
     steps:
-      
-      - name: AWS Credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-region: "us-east-1"
@@ -87,19 +80,19 @@ jobs:
       - name: Terraform Apply
         run: terraform apply --auto-approve
       
-     
-      - id: ip_address
+      - name: Get IP Address
+        id: ip_address
         run: | 
-            terraform-bin output my_ip |tr "\"" "\0" >ip
-            echo ip=$(cat ip) >> "$GITHUB_OUTPUT" 
+          terraform output my_ip | tr -d '"' > ip
+          echo "ip=$(cat ip)" >> $GITHUB_ENV
     
       - name: Download Artifact
-        uses: actions/download-artifact@main
+        uses: actions/download-artifact@v2
         with:
           name: result
           path: dist/    
 
-      - name: deploy copy to ec2
+      - name: Deploy to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ steps.ip_address.outputs.ip }}
@@ -109,7 +102,7 @@ jobs:
           source: dist/
           target: App
 
-      - name: multiple command
+      - name: Run Multiple Commands on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ steps.ip_address.outputs.ip }}
@@ -117,8 +110,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
-              sudo yum install nodejs -y
-              sudo npm install -g pm2
-              cd App/dist
-              sudo npm install 
-              sudo pm2 start "PORT=80 node main.js"
+            sudo yum install nodejs -y
+            sudo npm install -g pm2
+            cd App/dist
+            sudo npm install 
+            sudo pm2 start "PORT=80 node main.js"
