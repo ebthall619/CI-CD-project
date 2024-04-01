@@ -4,14 +4,16 @@ on:
   push:
     branches:
       - main
+
 jobs:
-  test:
-    name: ${{ matrix.os }}
+  integration:
+    name: Node ${{ matrix.node_version }} - On ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
-        os: [ ubuntu-latest]
+        node_version: [ 16 ]
+        os: [ ubuntu-latest ]
 
     steps:
       - name: Checkout
@@ -23,44 +25,11 @@ jobs:
         with:
           node-version: 16.x
           cache: 'npm'
-      - name: Deps
-        run: |
-          npm ci
-
-      - name: Lint
-        run: |
-          npm run lint
-          npm run format:check
-
-      - name: Test
-        run: |
-          npm run test:ci
-  release:
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs:
-      - test
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Use Node
-        id: setup-node
-        uses: actions/setup-node@v4.0.1
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        with:
-          node-version: 16.x
-          registry-url: 'https://registry.npmjs.org'
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
 
       - name: Deps
+        run: |
+          npm install
+
       - name: Format
         run: |
           npm run format 
@@ -85,5 +54,72 @@ jobs:
         uses: actions/upload-artifact@main
         with:
           name: result
-          path: dist/
-          
+          path: dist/   
+        
+  deployment:
+    name: provision aws infrastructure using terraform 
+    runs-on: ubuntu-latest
+    needs: integration
+    outputs: 
+      output1: ${{ steps.ip_address.outputs.ip }}
+    env: 
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+    steps:
+      
+      - name: AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: "us-east-1"
+     
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Terraform 
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Init
+        run: terraform init
+      
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+      
+      - name: Terraform Apply
+        run: terraform apply --auto-approve
+      
+     
+      - id: ip_address
+        run: | 
+            terraform-bin output my_ip |tr "\"" "\0" >ip
+            echo ip=$(cat ip) >> "$GITHUB_OUTPUT" 
+    
+      - name: Download Artifact
+        uses: actions/download-artifact@main
+        with:
+          name: result
+          path: dist/    
+
+      - name: deploy copy to ec2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ steps.ip_address.outputs.ip }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: dist/
+          target: App
+
+      - name: multiple command
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ steps.ip_address.outputs.ip }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+              sudo yum install nodejs -y
+              sudo npm install -g pm2
+              cd App/dist
+              sudo npm install 
+              sudo pm2 start "PORT=80 node main.js"
